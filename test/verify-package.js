@@ -34,21 +34,6 @@ for (const [index, theme] of (manifest.contributes?.themes || []).entries()) {
 if (fs.existsSync(path.join(root, 'dist/ort-wasm-simd-threaded.wasm'))) {
   expectedEntries.add('dist/ort-wasm-simd-threaded.wasm')
 }
-if (fs.existsSync(path.join(root, 'model'))) {
-  function scanModel(dir, prefix) {
-    for (const item of fs.readdirSync(dir).sort()) {
-      const full = path.join(dir, item)
-      const p = `${prefix}/${item}`
-      if (fs.statSync(full).isDirectory()) {
-        expectedEntries.add(`${p}/`)
-        scanModel(full, p)
-      } else {
-        expectedEntries.add(p)
-      }
-    }
-  }
-  scanModel(path.join(root, 'model'), 'models')
-}
 
 assert.deepEqual(entries, [...expectedEntries].sort())
 assert.equal(entries.includes('manifest.json'), false)
