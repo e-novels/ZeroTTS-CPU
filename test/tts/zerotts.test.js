@@ -14,7 +14,8 @@ module.exports = async function runZeroTTSTests(root) {
   const manifest = JSON.parse(fs.readFileSync(path.join(root, 'extension.json'), 'utf8'))
   assert.equal(manifest.name, 'zerotts-cpu')
   assert.equal(manifest.contributes.tts.mode, 'wasm')
-  assert.ok(manifest.contributes.tts.resources.length >= 19, 'Must declare at least 19 model resources')
+  assert.ok(manifest.contributes.tts.resources.length >= 1, 'Must declare at least 1 model resource')
+  assert.equal(manifest.contributes.tts.resources[0].path, 'models/model.zip')
 
   // Test 2: Verify resources have valid SHA256 and valid URLs (file:// for local test, https:// for production)
   for (const res of manifest.contributes.tts.resources) {

@@ -2,7 +2,7 @@ import * as ortWeb from 'onnxruntime-web'
 import { BpeTokenizer } from './tokenizer'
 import { MossCodecDecoder, CodecMeta } from './codec'
 import { Rng } from './rng'
-import { normalizeViText } from './textNorm'
+import { normalizeViText, setAbbreviationsContent } from './textNorm'
 import { textSegments } from './chunking'
 import {
   ZeroTTSConfig,
@@ -15,6 +15,7 @@ import {
 let nodeFs: any = null
 let nodePath: any = null
 let nodeOs: any = null
+let nodeAdmZip: any = null
 
 try {
   // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -23,10 +24,13 @@ try {
   nodePath = typeof require === 'function' ? require('node:path') || require('path') : null
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   nodeOs = typeof require === 'function' ? require('node:os') || require('os') : null
+  // eslint-disable-next-line @typescript-eslint/no-var-requires
+  nodeAdmZip = typeof require === 'function' ? require('adm-zip') : null
 } catch {
   nodeFs = null
   nodePath = null
   nodeOs = null
+  nodeAdmZip = null
 }
 
 const CPU_COUNT = nodeOs?.cpus()?.length || (typeof navigator !== 'undefined' ? navigator.hardwareConcurrency : 4) || 4
@@ -158,12 +162,111 @@ export class ZeroTTSEngine {
   private silenceFrame: BigInt64Array | null = null
   private voiceCache = new Map<string, Float32Array>()
   private voiceList: VoiceMeta[] = DEFAULT_VOICES
+  private zipInstance: any = null
+  private zipChecked = false
 
   public isInitialized = false
   public isReadyForInference = false
 
   constructor(private novel: NovelExtensionApi) {
     getOrt()
+  }
+
+  private async getZip(): Promise<any> {
+    if (this.zipInstance) return this.zipInstance
+    if (this.zipChecked) return null
+    this.zipChecked = true
+
+    if (!nodeAdmZip) return null
+
+    // 1. Check local disk candidate paths
+    if (nodeFs) {
+      const zipCandidates = [
+        './models/model.zip',
+        './model.zip',
+        '../models/model.zip',
+        '../model.zip',
+        typeof __dirname !== 'undefined' && nodePath ? nodePath.join(__dirname, 'models/model.zip') : null,
+        typeof __dirname !== 'undefined' && nodePath ? nodePath.join(__dirname, 'model.zip') : null,
+        typeof __dirname !== 'undefined' && nodePath ? nodePath.join(__dirname, '../models/model.zip') : null,
+        typeof __dirname !== 'undefined' && nodePath ? nodePath.join(__dirname, '../model.zip') : null,
+        typeof __dirname !== 'undefined' && nodePath ? nodePath.join(__dirname, '../../model.zip') : null,
+        '/Users/dovanhai/ZeroTTS-CPU/model.zip',
+      ].filter(Boolean) as string[]
+
+      for (const zipPath of zipCandidates) {
+        try {
+          if (nodeFs.existsSync(zipPath)) {
+            this.zipInstance = new nodeAdmZip(zipPath)
+            await this.log(`Loaded model archive from local disk: ${zipPath}`)
+            return this.zipInstance
+          }
+        } catch (e: any) {
+          await this.warn(`Failed opening zip at ${zipPath}: ${e?.message || String(e)}`)
+        }
+      }
+    }
+
+    // 2. Check novel.storage SDK
+    if (this.novel.storage) {
+      const storageCandidates = ['models/model.zip', 'model.zip']
+      for (const sp of storageCandidates) {
+        try {
+          const fileObj = await this.novel.storage.get(sp)
+          if (fileObj) {
+            let buf: Buffer | null = null
+            if (typeof (fileObj as any).arrayBuffer === 'function') {
+              const ab = await (fileObj as any).arrayBuffer()
+              buf = Buffer.from(ab)
+            } else if (fileObj instanceof Uint8Array || (fileObj as any).buffer instanceof ArrayBuffer) {
+              buf = Buffer.from(fileObj as any)
+            }
+            if (buf && buf.length > 0) {
+              this.zipInstance = new nodeAdmZip(buf)
+              await this.log(`Loaded model archive from novel.storage: ${sp}`)
+              return this.zipInstance
+            }
+          }
+        } catch {}
+      }
+    }
+
+    return null
+  }
+
+  private async ensureExtractedFromZip(): Promise<void> {
+    if (!nodeFs || !nodeAdmZip) return
+    const zip = await this.getZip()
+    if (!zip) return
+
+    const diskDirs = [
+      './model',
+      './models',
+      '../model',
+      '../models',
+      typeof __dirname !== 'undefined' && nodePath ? nodePath.join(__dirname, 'model') : null,
+      typeof __dirname !== 'undefined' && nodePath ? nodePath.join(__dirname, 'models') : null,
+    ].filter(Boolean) as string[]
+
+    const alreadyExtracted = diskDirs.some(dir => {
+      try {
+        const testFile = nodePath ? nodePath.join(dir, 'onnx/text_encoder.onnx') : `${dir}/onnx/text_encoder.onnx`
+        return nodeFs.existsSync(testFile) && nodeFs.statSync(testFile).size > 1000000
+      } catch {
+        return false
+      }
+    })
+
+    if (alreadyExtracted) return
+
+    try {
+      const targetDir = typeof __dirname !== 'undefined' && nodePath ? nodePath.join(__dirname, '..') : process.cwd()
+      await this.log(`Extracting model.zip to ${targetDir}...`)
+      zip.extractAllTo(targetDir, true)
+      await this.log(`Successfully extracted model archive`)
+    } catch (e: any) {
+      await this.warn(`Auto-extract warning: ${e?.message || String(e)}`)
+    }
   }
 
   private async log(message: string, ...args: any[]): Promise<void> {
@@ -290,6 +393,29 @@ export class ZeroTTSEngine {
       }
     }
 
+    // 3. Fallback: Check inside model.zip archive
+    try {
+      const zip = await this.getZip()
+      if (zip) {
+        const entryCandidates = [
+          `model/${normalized}`,
+          `models/${normalized}`,
+          normalized,
+        ]
+        for (const entryPath of entryCandidates) {
+          const entry = zip.getEntry(entryPath)
+          if (entry) {
+            const buf = zip.readFile(entry)
+            if (buf) {
+              return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.length) as ArrayBuffer
+            }
+          }
+        }
+      }
+    } catch (e: any) {
+      await this.warn(`Error reading ${relativePath} from zip archive: ${e?.message || String(e)}`)
+    }
+
     return null
   }
 
@@ -409,6 +535,17 @@ export class ZeroTTSEngine {
     )
 
     try {
+      await this.ensureExtractedFromZip()
+
+      // 0. Load abbreviations.txt if available
+      const abbrBuf = await this.getBuffer('abbreviations.txt')
+      if (abbrBuf && abbrBuf.byteLength > 10) {
+        try {
+          const raw = new TextDecoder().decode(abbrBuf)
+          setAbbreviationsContent(raw)
+        } catch {}
+      }
+
       // 1. Load config.json
       const configBuf = await this.getBuffer('config.json')
       if (configBuf && configBuf.byteLength > 10) {

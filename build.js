@@ -31,7 +31,7 @@ async function bundle(outfile, platform) {
     alias: {
       'onnxruntime-web': path.resolve(root, 'node_modules/onnxruntime-web/dist/ort.wasm.bundle.min.mjs')
     },
-    external: ['onnxruntime-node']
+    external: ['onnxruntime-node', ...(platform === 'browser' ? ['adm-zip'] : [])]
   }
 
   if (isWatch) {
