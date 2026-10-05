@@ -164,8 +164,8 @@ function validateTTSContribution(tts) {
       if (!res || typeof res !== 'object') {
         fail(`contributes.tts.resources[${i}] is invalid.`)
       }
-      if (!res.url || typeof res.url !== 'string' || !res.url.startsWith('https://')) {
-        fail(`contributes.tts.resources[${i}].url must be a valid HTTPS url.`)
+      if (!res.url || typeof res.url !== 'string' || (!res.url.startsWith('https://') && !res.url.startsWith('file://') && !res.url.startsWith('http://'))) {
+        fail(`contributes.tts.resources[${i}].url must be a valid HTTPS, HTTP, or file URL.`)
       }
       requireRelativePath(res.path, `contributes.tts.resources[${i}].path`)
       if (typeof res.size !== 'number' || res.size <= 0) {

@@ -1,54 +1,78 @@
+import { ZeroTTSEngine } from '../engine/ZeroTTSEngine'
+import { createWavBase64 } from '../engine/wavHelper'
+
 export class WasmBridge {
-  private isInitialized = false
+  private engine: ZeroTTSEngine
+  private isStopped = false
 
-  constructor(private novel: NovelExtensionApi) { }
-
-  async initialize(): Promise<void> {
-    if (this.isInitialized) return
-    // Option 1: Load ONNX/WASM binary model file from extension directory as a File object
-    // const modelFile = (await this.novel.storage?.get('models/voice-model.onnx')) as File
-    // const arrayBuffer = await modelFile.arrayBuffer()
-    //
-    // Option 2: Get a streaming virtual asset URL (novel-ext://... or blob:...)
-    // const modelUrl = await this.novel.storage?.createAssetUrl('models/voice-model.onnx')
-    // const response = await fetch(modelUrl!)
-    // const arrayBuffer = await response.arrayBuffer()
-    this.isInitialized = true
+  constructor(private novel: NovelExtensionApi) {
+    this.engine = new ZeroTTSEngine(novel)
   }
 
-  async getVoices(): Promise<ExtensionTTSGetVoicesResponse> {
-    return {
-      voices: [
-        { id: 'wasm-onnx-vn', name: 'WASM ONNX Voice (Vietnamese)', lang: 'vi-VN' }
-      ]
+  private async log(message: string, ...args: any[]): Promise<void> {
+    const formatted = `[WasmBridge] ${message}`
+    if (this.novel.logger?.info) {
+      await this.novel.logger.info(formatted, ...args)
+    } else {
+      console.log(formatted, ...args)
     }
   }
 
+  async initialize(): Promise<void> {
+    await this.engine.initialize()
+  }
+
+  async getVoices(): Promise<ExtensionTTSGetVoicesResponse> {
+    await this.initialize()
+    const voicesRes = this.engine.getVoices()
+    await this.log(`getVoices() returning ${voicesRes.voices.length} ZeroTTS voices`)
+    return voicesRes
+  }
+
   async speak(request: ExtensionTTSSpeakRequest): Promise<ExtensionTTSSpeakResponse> {
+    const startTime = Date.now()
+    this.isStopped = false
     await this.initialize()
 
-    // ONNX / WASM in-sandbox inference
-    const mockAudioHeader =
-      'RIFF\x24\x00\x00\x00WAVEfmt \x10\x00\x00\x00\x01\x00\x01\x00' +
-      '\x44\xac\x00\x00\x88\x58\x01\x00\x02\x00\x10\x00data\x00\x00\x00\x00'
+    const text = request.text || ''
+    const config = (request.config || {}) as Record<string, unknown>
+    let voiceId = request.voiceId
+    if (!voiceId && typeof config.voice === 'string' && config.voice) {
+      voiceId = config.voice
+    }
+    voiceId = this.engine.resolveVoiceId(voiceId || 'maichi')
+
+    const temperature = typeof config.temperature === 'number' ? config.temperature : 0.8
+    const audioRepetitionPenalty =
+      typeof config.audioRepetitionPenalty === 'number' ? config.audioRepetitionPenalty : 1.2
+    const cfgScale = typeof config.cfgScale === 'number' ? config.cfgScale : 1.0
+
+    await this.log(
+      `[Speak Start] text="${text.substring(0, 80)}${text.length > 80 ? '...' : ''}", voiceId=${voiceId}, cfgScale=${cfgScale}, temp=${temperature}`
+    )
+
+    const audioPcm = await this.engine.synthesize(text, voiceId, {
+      audioTemperature: temperature,
+      audioRepetitionPenalty,
+      cfgScale,
+    })
+
+    const durationSec = (audioPcm.length / ZeroTTSEngine.SAMPLE_RATE).toFixed(2)
+    const base64Audio = createWavBase64(audioPcm, ZeroTTSEngine.SAMPLE_RATE)
+
+    await this.log(
+      `[Speak Complete] Generated ${audioPcm.length} samples at ${ZeroTTSEngine.SAMPLE_RATE}Hz (${durationSec}s audio) in ${Date.now() - startTime}ms`
+    )
 
     return {
-      audio: btoa(mockAudioHeader),
-      mimeType: 'audio/wav'
+      audio: base64Audio,
+      mimeType: 'audio/wav',
     }
   }
 
   async stop(): Promise<ExtensionTTSStopResponse> {
+    await this.log('stop() called')
+    this.isStopped = true
     return { success: true }
-  }
-
-  private base64ToArrayBuffer(base64: string): ArrayBuffer {
-    const binary = atob(base64)
-    const buffer = new ArrayBuffer(binary.length)
-    const view = new Uint8Array(buffer)
-    for (let i = 0; i < binary.length; i++) {
-      view[i] = binary.charCodeAt(i)
-    }
-    return buffer
   }
 }

@@ -27,6 +27,11 @@ archive.addLocalFile(path.join(root, 'extension.json'))
 archive.addLocalFile(path.join(root, 'README.md'))
 archive.addLocalFolder(path.join(root, 'dist'), 'dist')
 archive.addLocalFolder(path.join(root, 'src', 'public'), 'public')
+if (fs.existsSync(path.join(root, 'model'))) {
+	archive.addLocalFolder(path.join(root, 'model'), 'models')
+}
+
+
 requirePackagedAsset(manifest.icon, 'icon')
 
 for (const [index, theme] of (manifest.contributes?.themes || []).entries()) {
