@@ -16,8 +16,8 @@ module.exports = async function runZeroTTSTests(root) {
   assert.equal(manifest.contributes.tts.mode, 'wasm')
   assert.ok(manifest.contributes.tts.resources.length >= 30, 'Must declare at least 30 model resources')
   assert.ok(
-    manifest.contributes.tts.resources.every(r => r.url.startsWith('https://github.com/e-novels/ZeroTTS-CPU/releases/download/')),
-    'All resources must be downloaded from GitHub Release'
+    manifest.contributes.tts.resources.every(r => r.url.startsWith('https://huggingface.co/haidv2806/zerotts-model/resolve/main/model/')),
+    'All resources must be downloaded from Hugging Face model repository'
   )
 
   // Test 2: Verify resources have valid SHA256 and valid URLs (file:// for local test, https:// for production)
