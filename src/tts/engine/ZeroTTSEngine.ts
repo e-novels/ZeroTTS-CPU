@@ -167,6 +167,7 @@ export class ZeroTTSEngine {
 
   public isInitialized = false
   public isReadyForInference = false
+  private initPromise: Promise<void> | null = null
 
   constructor(private novel: NovelExtensionApi) {
     getOrt()
@@ -526,13 +527,15 @@ export class ZeroTTSEngine {
 
   async initialize(): Promise<void> {
     if (this.isInitialized) return
+    if (this.initPromise) return this.initPromise
 
-    const ortInstance = getOrt()
-    await this.log(
-      `Initializing ZeroTTS CPU Engine (Runtime: ${
-        isNativeNode ? 'Native C++ onnxruntime-node' : 'WebAssembly onnxruntime-web'
-      }, CPU Cores: ${CPU_COUNT})`
-    )
+    this.initPromise = (async () => {
+      const ortInstance = getOrt()
+      await this.log(
+        `Initializing ZeroTTS CPU Engine (Runtime: ${
+          isNativeNode ? 'Native C++ onnxruntime-node' : 'WebAssembly onnxruntime-web'
+        }, CPU Cores: ${CPU_COUNT})`
+      )
 
     try {
       await this.ensureExtractedFromZip()
@@ -664,10 +667,15 @@ export class ZeroTTSEngine {
         await this.warn('ZeroTTS model files are not yet available or are corrupted. Please verify model downloads.')
       }
 
-      this.isInitialized = true
-    } catch (err: unknown) {
-      await this.error(`Failed during initialize: ${err instanceof Error ? err.stack || err.message : String(err)}`)
-    }
+        this.isInitialized = true
+      } catch (err: unknown) {
+        await this.error(`Failed during initialize: ${err instanceof Error ? err.stack || err.message : String(err)}`)
+      }
+    })().finally(() => {
+      this.initPromise = null
+    })
+
+    return this.initPromise
   }
 
   getVoices(): ExtensionTTSGetVoicesResponse {
